@@ -6,6 +6,8 @@ import Link from "next/link";
 export default function DashboardPage() {
     const [activeView, setActiveView] = useState("overview");
     const [identifyState, setIdentifyState] = useState("upload");
+    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+    const [settingsTab, setSettingsTab] = useState("profile");
 
     return (
         <div className="flex h-screen overflow-hidden bg-[#f3f4f6] text-[#111827] font-sans">
@@ -53,13 +55,55 @@ export default function DashboardPage() {
                         <button className="bg-transparent border-none text-[#6b7280] text-[20px] cursor-pointer hover:text-[#111827]">
                             <i className="ti ti-bell"></i>
                         </button>
-                        <div className="flex items-center gap-3 cursor-pointer">
-                            <div className="flex flex-col items-end">
-                                <span className="text-[14px] font-medium">Dr. Jon Kabir</span>
-                                <span className="text-[12px] text-[#6b7280]">Admin</span>
+                        <div className="relative">
+                            <div 
+                                className="flex items-center gap-3 cursor-pointer"
+                                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                            >
+                                <div className="flex flex-col items-end">
+                                    <span className="text-[14px] font-medium">Dr. Jon Kabir</span>
+                                    <span className="text-[12px] text-[#6b7280]">Admin</span>
+                                </div>
+                                <img src="https://i.pravatar.cc/150?img=11" alt="Avatar" className="w-9 h-9 rounded-full" />
+                                <i className="ti ti-chevron-down text-[#111827] text-[16px]"></i>
                             </div>
-                            <img src="https://i.pravatar.cc/150?img=11" alt="Avatar" className="w-9 h-9 rounded-full" />
-                            <i className="ti ti-chevron-down text-[#111827] text-[16px]"></i>
+
+                            {isDropdownOpen && (
+                                <div className="absolute top-[calc(100%+10px)] right-0 w-[280px] bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.1)] border border-[#e5e7eb] z-50 p-4 animate-in fade-in zoom-in-95 duration-200">
+                                    <div className="flex items-center justify-between pb-4 border-b border-[#e5e7eb]">
+                                        <div className="flex items-center gap-3">
+                                            <img src="https://i.pravatar.cc/150?img=11" alt="Avatar" className="w-10 h-10 rounded-full" />
+                                            <div>
+                                                <div className="text-[14px] font-semibold text-[#111827]">Dr. Jon Kabir</div>
+                                                <div className="text-[11px] font-medium text-[#6b7280] bg-[#f3f4f6] px-2 py-0.5 rounded-full inline-block mt-1">Admin</div>
+                                            </div>
+                                        </div>
+                                        <button className="text-[#6b7280] hover:text-[#111827] bg-transparent border-none cursor-pointer" onClick={() => setIsDropdownOpen(false)}>
+                                            <i className="ti ti-x text-[18px]"></i>
+                                        </button>
+                                    </div>
+                                    <div className="py-2">
+                                        <button 
+                                            className="w-full text-left px-2 py-2.5 text-[14px] text-[#111827] bg-transparent border-none cursor-pointer hover:bg-[#f9fafb] rounded-md transition-colors"
+                                            onClick={() => { setActiveView("settings"); setSettingsTab("profile"); setIsDropdownOpen(false); }}
+                                        >
+                                            Profile
+                                        </button>
+                                        <button 
+                                            className="w-full flex items-center justify-between bg-transparent border-none cursor-pointer px-2 py-2.5 text-[14px] text-[#111827] hover:bg-[#f9fafb] rounded-md transition-colors"
+                                            onClick={() => { setActiveView("settings"); setSettingsTab("profile"); setIsDropdownOpen(false); }}
+                                        >
+                                            Settings
+                                            <i className="ti ti-chevron-right text-[#6b7280]"></i>
+                                        </button>
+                                    </div>
+                                    <div className="pt-2">
+                                        <button className="w-full bg-[#3730a3] border-none border-none cursor-pointer text-white py-2.5 rounded-md text-[14px] font-medium hover:bg-[#312e81] transition-colors">
+                                            Log out
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </header>
@@ -352,6 +396,111 @@ export default function DashboardPage() {
                                         <a href="#" className="w-8 h-8 flex justify-center items-center rounded-lg text-[13px] text-[#111827] bg-transparent hover:bg-[#f3f4f6]" onClick={(e) => e.preventDefault()}>3</a>
                                         <a href="#" className="w-8 h-8 flex justify-center items-center rounded-lg text-[13px] text-[#111827] bg-transparent hover:bg-[#f3f4f6]" onClick={(e) => e.preventDefault()}><i className="ti ti-chevron-right"></i></a>
                                     </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* VIEW: SETTINGS */}
+                    {activeView === "settings" && (
+                        <div className="animate-in fade-in duration-300">
+                            <h1 className="text-[24px] font-semibold mb-2">Settings</h1>
+                            <p className="text-[14px] text-[#6b7280]">Manage your account and application preferences</p>
+
+                            <div className="flex gap-6 mt-6">
+                                {/* Settings Sidebar */}
+                                <div className="w-[240px] shrink-0">
+                                    <div className="bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.05)] overflow-hidden">
+                                        <div className="p-2 flex flex-col gap-1">
+                                            <button 
+                                                onClick={() => setSettingsTab("profile")}
+                                                className={`flex items-center gap-3 px-4 py-3 text-[14px] border-none cursor-pointer rounded-lg transition-colors text-left ${settingsTab === "profile" ? 'bg-[#f3f4f6] text-[#111827] font-medium' : 'bg-transparent text-[#6b7280] hover:bg-gray-50'}`}
+                                            >
+                                                <i className="ti ti-user text-[18px]"></i> Profile
+                                            </button>
+                                            <button 
+                                                onClick={() => setSettingsTab("security")}
+                                                className={`flex items-center gap-3 px-4 py-3 text-[14px] border-none cursor-pointer rounded-lg transition-colors text-left ${settingsTab === "security" ? 'bg-[#f3f4f6] text-[#111827] font-medium' : 'bg-transparent text-[#6b7280] hover:bg-gray-50'}`}
+                                            >
+                                                <i className="ti ti-shield-check text-[18px]"></i> Security
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Settings Content */}
+                                <div className="flex-1">
+                                    {settingsTab === "profile" && (
+                                        <div className="bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.05)] p-8 animate-in fade-in duration-300">
+                                            <h2 className="text-[16px] font-semibold text-[#111827] mb-1">Profile Settings</h2>
+                                            <p className="text-[13px] text-[#6b7280] mb-8 pb-6 border-b border-[#e5e7eb]">Update your personal information and credentials</p>
+                                            
+                                            <div className="mb-8">
+                                                <div className="text-[14px] font-medium text-[#111827] mb-4">Profile Picture</div>
+                                                <div className="relative inline-block">
+                                                    <div className="w-20 h-20 rounded-full bg-[#5b51d8] flex items-center justify-center text-white text-[28px]">
+                                                        <i className="ti ti-user"></i>
+                                                    </div>
+                                                    <button className="absolute bottom-[2px] right-[2px] w-[22px] h-[22px] rounded-full bg-[#10b981] flex items-center justify-center text-white text-[12px] border-[2px] border-white cursor-pointer hover:bg-[#059669]">
+                                                        <i className="ti ti-camera"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 gap-5 max-w-[600px]">
+                                                <div>
+                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Full Name</label>
+                                                    <input type="text" defaultValue="Dr. John Smith" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Email Address</label>
+                                                    <input type="email" defaultValue="dr.smith@hospital.com" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Phone Number</label>
+                                                    <input type="tel" defaultValue="dr.smith@hospital.com" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Organization</label>
+                                                    <input type="text" defaultValue="AeroVision Inc." className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-8">
+                                                <button className="bg-[#4338ca] border-none cursor-pointer hover:bg-[#3730a3] text-white text-[14px] font-medium py-2.5 px-5 rounded-md transition-colors flex items-center gap-2">
+                                                    <i className="ti ti-device-floppy text-[18px]"></i> Save Changes
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {settingsTab === "security" && (
+                                        <div className="bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.05)] p-8 animate-in fade-in duration-300">
+                                            <h2 className="text-[16px] font-semibold text-[#111827] mb-1">Change Password</h2>
+                                            <p className="text-[13px] text-[#6b7280] mb-8 pb-6 border-b border-[#e5e7eb]">Ensure your account uses a strong, unique password</p>
+                                            
+                                            <div className="grid grid-cols-1 gap-5 max-w-[600px]">
+                                                <div>
+                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Current Password</label>
+                                                    <input type="password" placeholder="Enter your current password" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[13px] text-[#374151] mb-1.5">New Password</label>
+                                                    <input type="password" placeholder="Enter your new password" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Confirm New Password</label>
+                                                    <input type="password" placeholder="Enter new password" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-8">
+                                                <button className="bg-[#4338ca] border-none cursor-pointer hover:bg-[#3730a3] text-white text-[14px] font-medium py-2.5 px-5 rounded-md transition-colors flex items-center gap-2">
+                                                    <i className="ti ti-device-floppy text-[18px]"></i> Update Password
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>
