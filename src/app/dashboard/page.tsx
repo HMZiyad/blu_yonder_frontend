@@ -1,17 +1,180 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { dashboardService } from "../../services/dashboard.service";
+import { aircraftService } from "../../services/aircraft.service";
+import { userService } from "../../services/user.service";
+import { authService } from "../../services/auth.service";
 
 export default function DashboardPage() {
+    const router = useRouter();
     const [activeView, setActiveView] = useState("overview");
     const [identifyState, setIdentifyState] = useState("upload");
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [settingsTab, setSettingsTab] = useState("profile");
 
+    // Loading & Error states
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    // Data states
+    const [stats, setStats] = useState<any>(null);
+    const [identifyResult, setIdentifyResult] = useState<any>(null);
+    const [records, setRecords] = useState<any[]>([]);
+    const [profile, setProfile] = useState<any>(() => authService.getUser()); // load cached user immediately
+    const [previewImage, setPreviewImage] = useState<string | null>(null);
+
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        setError(null);
+        if (activeView === "overview") fetchStats();
+        else if (activeView === "database") fetchRecords();
+        else if (activeView === "settings" && settingsTab === "profile") fetchProfile();
+    }, [activeView, settingsTab, identifyState]);
+
+    const fetchStats = async () => {
+        setIsLoading(true);
+        try {
+            // Backend returns: { total_images, to_be_processed, weekly_chart: number[] }
+            const data: any = await dashboardService.getStats();
+            setStats(data);
+        } catch (err: any) {
+            console.error('Stats error:', err);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const fetchRecords = async (search?: string) => {
+        setIsLoading(true);
+        try {
+            // Backend returns: { records: AircraftRecord[] }
+            const data: any = await aircraftService.getRecords(search);
+            setRecords(data?.records || []);
+        } catch (err: any) {
+            console.error('Records error:', err);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const fetchProfile = async () => {
+        setIsLoading(true);
+        try {
+            const data = await userService.getProfile();
+            setProfile(data);
+        } catch (err: any) {
+            console.error('Profile error:', err);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleLogout = (e: any) => {
+        e.preventDefault();
+        authService.logout();
+        router.push('/');
+    };
+
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            const file = e.target.files[0];
+            setIsLoading(true);
+            setError(null);
+            
+            // Create local preview immediately
+            const objectUrl = URL.createObjectURL(file);
+            setPreviewImage(objectUrl);
+
+            try {
+                // /api/aircraft/identify returns the FULL result directly (no second GET needed)
+                // Response: { model_name, manufacturer, image_filename, image_metadata, technical_specs, historical_context, verified_links }
+                const result: any = await aircraftService.identify(file);
+                setIdentifyResult(result);
+                setIdentifyState('result');
+            } catch (err: any) {
+                setError(err.message || 'Failed to identify image');
+            } finally {
+                setIsLoading(false);
+                e.target.value = '';
+            }
+        }
+    };
+
+    const handleUpdateProfile = async (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        setIsLoading(true);
+        setError(null);
+        const formData = new FormData(e.currentTarget);
+        const payload = {
+            name: formData.get('name') as string,
+            email: formData.get('email') as string,
+            phone: formData.get('phone') as string,
+            organization: formData.get('organization') as string
+        };
+        try {
+            const res: any = await userService.updateProfile(payload);
+            // Update cached user so header reflects changes immediately
+            const currentUser = authService.getUser() || {};
+            authService.setUser({ ...currentUser, ...payload, ...(res?.user || {}) });
+            setProfile((prev: any) => ({ ...prev, ...payload, ...(res?.user || {}) }));
+            alert("Profile updated successfully!");
+        } catch (err: any) {
+            setError(err.message || "Failed to update profile");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleChangePassword = async (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        setIsLoading(true);
+        setError(null);
+        const formData = new FormData(e.currentTarget);
+        const newPassword = formData.get('new_password') as string;
+        const confirm = formData.get('confirm_password') as string;
+
+        if (newPassword !== confirm) {
+            setError("New passwords do not match");
+            setIsLoading(false);
+            return;
+        }
+
+        try {
+            await userService.changePassword({
+                current_password: formData.get('current_password') as string,
+                new_password: newPassword
+            });
+            alert("Password changed successfully!");
+            (e.target as HTMLFormElement).reset();
+        } catch (err: any) {
+            setError(err.message || "Failed to change password");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+            fetchRecords(e.currentTarget.value);
+        }
+    };
+
+    // Map actual backend field names to display values
+    // Backend stats: { total_images, to_be_processed, weekly_chart: number[] }
+    const totalImages = stats?.total_images ?? 0;
+    const toBeProcessed = stats?.to_be_processed ?? 0;
+    const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const MAX_CHART = 40;
+    const weekData = (stats?.weekly_chart as number[] | undefined)
+        ? (stats.weekly_chart as number[]).map((v: number, i: number) => ({ label: DAY_LABELS[i] || `D${i}`, h: `${Math.round((v / MAX_CHART) * 100)}%` }))
+        : DAY_LABELS.map(l => ({ label: l, h: '0%' }));
+    const displayRecords = records;
+
     return (
         <div className="flex h-screen overflow-hidden bg-[#f3f4f6] text-[#111827] font-sans">
-
             {/* Sidebar */}
             <aside className="w-[260px] bg-[#111827] flex flex-col text-[#9ca3af]">
                 <div className="py-5 flex justify-center border-b border-white/5">
@@ -20,30 +183,21 @@ export default function DashboardPage() {
 
                 <div className="text-[11px] font-semibold tracking-wide py-5 px-6 pb-2.5 uppercase text-white/40">MAIN MENU</div>
                 <nav className="flex flex-col gap-1 px-4 flex-1">
-                    <button
-                        onClick={() => setActiveView("overview")}
-                        className={`flex items-center gap-3 px-4 py-3 text-[14px] rounded-lg transition-colors ${activeView === "overview" ? 'bg-[#3730a3] text-white' : 'hover:bg-[#1f2937] hover:text-white'}`}
-                    >
+                    <button onClick={() => setActiveView("overview")} className={`flex items-center gap-3 px-4 py-3 text-[14px] rounded-lg transition-colors ${activeView === "overview" ? 'bg-[#3730a3] text-white' : 'hover:bg-[#1f2937] hover:text-white'}`}>
                         <i className="ti ti-layout-dashboard text-[18px]"></i> Overview
                     </button>
-                    <button
-                        onClick={() => { setActiveView("identify"); setIdentifyState("upload"); }}
-                        className={`flex items-center gap-3 px-4 py-3 text-[14px] rounded-lg transition-colors ${activeView === "identify" ? 'bg-[#3730a3] text-white' : 'hover:bg-[#1f2937] hover:text-white'}`}
-                    >
+                    <button onClick={() => setActiveView("identify")} className={`flex items-center gap-3 px-4 py-3 text-[14px] rounded-lg transition-colors ${activeView === "identify" ? 'bg-[#3730a3] text-white' : 'hover:bg-[#1f2937] hover:text-white'}`}>
                         <i className="ti ti-scan text-[18px]"></i> Identify Aircraft
                     </button>
-                    <button
-                        onClick={() => setActiveView("database")}
-                        className={`flex items-center gap-3 px-4 py-3 text-[14px] rounded-lg transition-colors ${activeView === "database" ? 'bg-[#3730a3] text-white' : 'hover:bg-[#1f2937] hover:text-white'}`}
-                    >
+                    <button onClick={() => setActiveView("database")} className={`flex items-center gap-3 px-4 py-3 text-[14px] rounded-lg transition-colors ${activeView === "database" ? 'bg-[#3730a3] text-white' : 'hover:bg-[#1f2937] hover:text-white'}`}>
                         <i className="ti ti-database text-[18px]"></i> Database
                     </button>
                 </nav>
 
                 <div className="p-[20px_16px] border-t border-white/5">
-                    <Link href="/" className="flex items-center gap-3 px-4 py-3 text-[14px] rounded-lg text-[#ef4444] transition-colors hover:bg-red-500/10 hover:text-[#ef4444]">
+                    <a href="#" onClick={handleLogout} className="flex items-center gap-3 px-4 py-3 text-[14px] rounded-lg text-[#ef4444] transition-colors hover:bg-red-500/10 hover:text-[#ef4444]">
                         <i className="ti ti-logout text-[18px]"></i> Logout
-                    </Link>
+                    </a>
                 </div>
             </aside>
 
@@ -56,12 +210,9 @@ export default function DashboardPage() {
                             <i className="ti ti-bell"></i>
                         </button>
                         <div className="relative">
-                            <div 
-                                className="flex items-center gap-3 cursor-pointer"
-                                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                            >
+                            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setIsDropdownOpen(!isDropdownOpen)}>
                                 <div className="flex flex-col items-end">
-                                    <span className="text-[14px] font-medium">Dr. Jon Kabir</span>
+                                    <span className="text-[14px] font-medium">{profile?.name || "User"}</span>
                                     <span className="text-[12px] text-[#6b7280]">Admin</span>
                                 </div>
                                 <img src="https://i.pravatar.cc/150?img=11" alt="Avatar" className="w-9 h-9 rounded-full" />
@@ -74,7 +225,7 @@ export default function DashboardPage() {
                                         <div className="flex items-center gap-3">
                                             <img src="https://i.pravatar.cc/150?img=11" alt="Avatar" className="w-10 h-10 rounded-full" />
                                             <div>
-                                                <div className="text-[14px] font-semibold text-[#111827]">Dr. Jon Kabir</div>
+                                                <div className="text-[14px] font-semibold text-[#111827]">{profile?.name || "User"}</div>
                                                 <div className="text-[11px] font-medium text-[#6b7280] bg-[#f3f4f6] px-2 py-0.5 rounded-full inline-block mt-1">Admin</div>
                                             </div>
                                         </div>
@@ -83,22 +234,16 @@ export default function DashboardPage() {
                                         </button>
                                     </div>
                                     <div className="py-2">
-                                        <button 
-                                            className="w-full text-left px-2 py-2.5 text-[14px] text-[#111827] bg-transparent border-none cursor-pointer hover:bg-[#f9fafb] rounded-md transition-colors"
-                                            onClick={() => { setActiveView("settings"); setSettingsTab("profile"); setIsDropdownOpen(false); }}
-                                        >
+                                        <button className="w-full text-left px-2 py-2.5 text-[14px] text-[#111827] bg-transparent border-none cursor-pointer hover:bg-[#f9fafb] rounded-md transition-colors" onClick={() => { setActiveView("settings"); setSettingsTab("profile"); setIsDropdownOpen(false); }}>
                                             Profile
                                         </button>
-                                        <button 
-                                            className="w-full flex items-center justify-between bg-transparent border-none cursor-pointer px-2 py-2.5 text-[14px] text-[#111827] hover:bg-[#f9fafb] rounded-md transition-colors"
-                                            onClick={() => { setActiveView("settings"); setSettingsTab("profile"); setIsDropdownOpen(false); }}
-                                        >
+                                        <button className="w-full flex items-center justify-between bg-transparent border-none cursor-pointer px-2 py-2.5 text-[14px] text-[#111827] hover:bg-[#f9fafb] rounded-md transition-colors" onClick={() => { setActiveView("settings"); setSettingsTab("profile"); setIsDropdownOpen(false); }}>
                                             Settings
                                             <i className="ti ti-chevron-right text-[#6b7280]"></i>
                                         </button>
                                     </div>
                                     <div className="pt-2">
-                                        <button className="w-full bg-[#3730a3] border-none border-none cursor-pointer text-white py-2.5 rounded-md text-[14px] font-medium hover:bg-[#312e81] transition-colors">
+                                        <button onClick={handleLogout} className="w-full bg-[#3730a3] border-none border-none cursor-pointer text-white py-2.5 rounded-md text-[14px] font-medium hover:bg-[#312e81] transition-colors">
                                             Log out
                                         </button>
                                     </div>
@@ -110,6 +255,12 @@ export default function DashboardPage() {
 
                 {/* Workspace */}
                 <div className="flex-1 p-10 overflow-y-auto bg-[#f3f4f6]">
+
+                    {error && activeView !== "settings" && (
+                        <div className="mb-6 p-4 rounded-lg bg-red-50 border border-red-200 text-red-600 text-[14px]">
+                            {error}
+                        </div>
+                    )}
 
                     {/* VIEW: OVERVIEW */}
                     {activeView === "overview" && (
@@ -123,7 +274,7 @@ export default function DashboardPage() {
                                         <span>Total Images Identified</span>
                                         <i className="ti ti-plane text-[#8b5cf6] text-[18px]"></i>
                                     </div>
-                                    <h2 className="text-[32px] font-semibold mb-2">26</h2>
+                                    <h2 className="text-[32px] font-semibold mb-2">{totalImages}</h2>
                                     <p className="text-[12px] text-[#6b7280]">Total Overall Images Processed</p>
                                 </div>
 
@@ -132,7 +283,7 @@ export default function DashboardPage() {
                                         <span>To Be Processed</span>
                                         <i className="ti ti-message-circle text-[#10b981] text-[18px]"></i>
                                     </div>
-                                    <h2 className="text-[32px] font-semibold mb-2">132</h2>
+                                    <h2 className="text-[32px] font-semibold mb-2">{toBeProcessed}</h2>
                                     <p className="text-[12px] text-[#6b7280]">Currently ongoing</p>
                                 </div>
 
@@ -148,24 +299,14 @@ export default function DashboardPage() {
                                     </div>
 
                                     <div className="flex-1 relative">
-                                        {/* Grid lines */}
                                         <div className="absolute inset-0 h-[calc(100%-24px)] flex flex-col justify-between z-0">
                                             {[1, 2, 3, 4, 5, 6].map((_, i) => (
                                                 <div key={i} className="border-t border-black/5 h-0" />
                                             ))}
                                         </div>
 
-                                        {/* Bars */}
                                         <div className="absolute inset-0 h-[calc(100%-24px)] flex justify-around items-end z-10 px-2.5">
-                                            {[
-                                                { label: 'Mon', h: '55%' },
-                                                { label: 'Tue', h: '65%' },
-                                                { label: 'Wed', h: '40%' },
-                                                { label: 'Thu', h: '60%' },
-                                                { label: 'Fri', h: '80%' },
-                                                { label: 'Sat', h: '35%' },
-                                                { label: 'Sun', h: '65%' }
-                                            ].map((item) => (
+                                            {weekData.map((item: any) => (
                                                 <div key={item.label} className="flex flex-col items-center justify-end h-full relative w-10 text-center">
                                                     <div className="w-6 bg-[#3730a3] rounded-t-sm transition-all duration-300" style={{ height: item.h }} />
                                                     <span className="absolute -bottom-6 text-[12px] text-[#6b7280]">{item.label}</span>
@@ -193,13 +334,23 @@ export default function DashboardPage() {
                                     <p className="text-[14px] text-[#6b7280]">Upload aircraft images for AI-powered analysis and registration detection.</p>
                                 </div>
                                 {identifyState === "result" && (
-                                    <button className="bg-[#3730a3] text-white border-none py-2.5 px-5 rounded-md text-[14px] font-medium cursor-pointer hover:bg-[#312e81] flex items-center gap-2">
-                                        <i className="ti ti-upload"></i> Export File
+                                    <button 
+                                        onClick={() => {
+                                            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(identifyResult, null, 2));
+                                            const downloadAnchorNode = document.createElement('a');
+                                            downloadAnchorNode.setAttribute("href", dataStr);
+                                            downloadAnchorNode.setAttribute("download", `identified_${identifyResult?.model_name || 'aircraft'}.json`);
+                                            document.body.appendChild(downloadAnchorNode);
+                                            downloadAnchorNode.click();
+                                            downloadAnchorNode.remove();
+                                        }} 
+                                        className="bg-[#3730a3] text-white border-none py-2.5 px-5 rounded-md text-[14px] font-medium cursor-pointer hover:bg-[#312e81] flex items-center gap-2"
+                                    >
+                                        <i className="ti ti-upload"></i> Export JSON
                                     </button>
                                 )}
                             </div>
 
-                            {/* State 1: Upload */}
                             {identifyState === "upload" && (
                                 <div className="animate-in fade-in duration-300">
                                     <div className="flex items-center justify-between bg-white rounded-xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.05)] mt-6">
@@ -245,51 +396,65 @@ export default function DashboardPage() {
                                     </div>
 
                                     <div
-                                        onClick={() => setIdentifyState("result")}
-                                        className="border-2 border-dashed border-[#3730A3]/40 bg-white rounded-xl py-14 px-6 flex flex-col items-center text-center cursor-pointer transition-all hover:bg-[#fdfdff] hover:border-[#3730a3] mt-6"
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className={`border-2 border-dashed ${isLoading ? 'border-[#e5e7eb] bg-[#f9fafb]' : 'border-[#3730A3]/40 bg-white hover:bg-[#fdfdff] hover:border-[#3730a3]'} rounded-xl py-14 px-6 flex flex-col items-center text-center cursor-pointer transition-all mt-6`}
                                     >
-                                        <i className="ti ti-camera text-[#3730a3] text-[32px] mb-4"></i>
-                                        <h3 className="font-semibold text-[16px] mb-2">Upload Aircraft Images</h3>
-                                        <p className="text-[13px] text-[#6b7280] max-w-[500px] leading-relaxed">
-                                            Drop aircraft photos here or click to upload. Our AI will detect<br />the registration number, identify the aircraft type, and fetch FAA<br />data automatically.
-                                        </p>
-                                        <button className="bg-[#3730a3] text-white border-none py-2.5 px-5 rounded-md text-[14px] font-medium cursor-pointer hover:bg-[#312e81] mt-6 mx-auto">
-                                            Select Image
-                                        </button>
+                                        <input 
+                                            type="file" 
+                                            ref={fileInputRef} 
+                                            onChange={handleImageUpload} 
+                                            className="hidden" 
+                                            accept="image/*"
+                                        />
+                                        {isLoading ? (
+                                            <div className="flex flex-col items-center">
+                                                <i className="ti ti-loader text-[#3730a3] text-[32px] mb-4 animate-spin"></i>
+                                                <h3 className="font-semibold text-[16px] mb-2">Analyzing Image...</h3>
+                                                <p className="text-[13px] text-[#6b7280] max-w-[500px]">Please wait while our AI processes the aircraft data.</p>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <i className="ti ti-camera text-[#3730a3] text-[32px] mb-4"></i>
+                                                <h3 className="font-semibold text-[16px] mb-2">Upload Aircraft Images</h3>
+                                                <p className="text-[13px] text-[#6b7280] max-w-[500px] leading-relaxed">
+                                                    Drop aircraft photos here or click to upload. Our AI will detect<br />the registration number, identify the aircraft type, and fetch FAA<br />data automatically.
+                                                </p>
+                                                <button className="bg-[#3730a3] text-white border-none py-2.5 px-5 rounded-md text-[14px] font-medium cursor-pointer hover:bg-[#312e81] mt-6 mx-auto">
+                                                    Select Image
+                                                </button>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
                             )}
 
-                            {/* State 2: Result */}
                             {identifyState === "result" && (
                                 <div className="flex gap-6 mt-6 animate-in fade-in duration-300">
-                                    {/* Queue Sidebar */}
+                                    {/* Identified Image Sidebar */}
                                     <div className="bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.05)] flex flex-col w-[320px] min-h-[500px]">
                                         <div className="p-[20px_24px] font-semibold text-[14px] border-b border-[#e5e7eb] flex items-center gap-2">
-                                            <i className="ti ti-photo text-[#8b5cf6]"></i> Upload Queue
+                                            <i className="ti ti-photo text-[#8b5cf6]"></i> Identified Image
                                         </div>
 
                                         <div className="flex-1">
-                                            {[
-                                                { name: "Tramsata.jpg", status: "Completed", icon: "ti-circle-check", color: "text-[#10b981]", active: false },
-                                                { name: "AirBusA30.jpg", status: "Completed", icon: "ti-circle-check", color: "text-[#10b981]", active: true },
-                                                { name: "Navy 576.jpg", status: "Completed", icon: "ti-circle-check", color: "text-[#10b981]", active: false },
-                                                { name: "Air Canada.jpg", status: "Processing", icon: "ti-loader", color: "text-[#8b5cf6]", active: false }
-                                            ].map((item, idx) => (
-                                                <div key={idx} className={`flex items-center px-6 py-4 gap-4 border-b border-[#e5e7eb] relative ${item.active ? 'bg-[#fcfcff]' : ''}`}>
-                                                    <div className="w-12 h-12 rounded-md bg-[#e5e7eb] shrink-0" style={{ backgroundImage: "url('/logo/logo-aahs-3 1.png')", backgroundSize: "contain" }}></div>
-                                                    <div className="flex-1">
-                                                        <div className="font-medium text-[14px] mb-1">{item.name}</div>
-                                                        <div className={`text-[12px] flex items-center gap-1 ${item.color}`}><i className={`ti ${item.icon}`}></i> {item.status}</div>
+                                            {identifyResult && (
+                                                <div className="flex items-center px-6 py-4 gap-4 border-b border-[#e5e7eb] bg-[#fcfcff]">
+                                                    <div className="w-12 h-12 rounded-md bg-[#e5e7eb] shrink-0 flex items-center justify-center text-[#3730a3] text-[22px]">
+                                                        <i className="ti ti-plane"></i>
                                                     </div>
-                                                    <i className="ti ti-x absolute right-6 top-1/2 -translate-y-1/2 text-[#6b7280] cursor-pointer"></i>
+                                                    <div className="flex-1">
+                                                        <div className="font-medium text-[14px] mb-1">{identifyResult.image_filename || 'Uploaded Image'}</div>
+                                                        <div className="text-[12px] flex items-center gap-1 text-[#10b981]">
+                                                            <i className="ti ti-circle-check"></i> Completed
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                            ))}
+                                            )}
                                         </div>
 
                                         <button
                                             onClick={() => setIdentifyState("upload")}
-                                            className="bg-[#3730a3] text-white p-4 w-full border-none m-0 rounded-b-xl hover:bg-[#312e81] font-medium"
+                                            className="bg-[#3730a3] text-white p-4 w-full border-none m-0 rounded-b-xl hover:bg-[#312e81] font-medium cursor-pointer"
                                         >
                                             Add More
                                         </button>
@@ -298,23 +463,30 @@ export default function DashboardPage() {
                                     {/* Result Details */}
                                     <div className="flex-1 bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.05)] p-6">
                                         <div className="grid grid-cols-2 gap-6">
-                                            <div className="bg-[#f3f4f6] min-h-[300px] border-radius-8 bg-[url('/logo/logo-aahs-3 1.png')] bg-contain bg-center bg-no-repeat rounded-lg"></div>
+                                            {previewImage ? (
+                                                <div 
+                                                    className="bg-[#f3f4f6] min-h-[300px] border-radius-8 bg-contain bg-center bg-no-repeat rounded-lg"
+                                                    style={{ backgroundImage: `url(${previewImage})` }}
+                                                ></div>
+                                            ) : (
+                                                <div className="bg-[#f3f4f6] min-h-[300px] border-radius-8 bg-[url('/logo/logo-aahs-3 1.png')] bg-contain bg-center bg-no-repeat rounded-lg"></div>
+                                            )}
 
                                             <div>
                                                 <div className="inline-flex items-center gap-1.5 text-[#10b981] bg-[#10b981]/10 px-3 py-1.5 rounded-full text-[12px] font-medium">
                                                     <i className="ti ti-circle-check"></i> Identify Completed
                                                 </div>
-                                                <h2 className="text-[24px] font-semibold mt-4">Airbus A380</h2>
+                                                <h2 className="text-[24px] font-semibold mt-4">{identifyResult?.model_name || 'Unknown Aircraft'}</h2>
 
                                                 <table className="w-full mt-4 text-[14px]">
                                                     <tbody>
                                                         {[
-                                                            { label: "Image File Name :", val: "AirBusA30.jpg" },
-                                                            { label: "Manufacturer :", val: "Boeing" },
-                                                            { label: "Civil ID :", val: "N778UA" },
-                                                            { label: "Common Name :", val: "Triple Seven" },
-                                                            { label: "Confidence Factor :", val: "100%" },
-                                                            { label: "Operator :", val: "United Airlines" },
+                                                            { label: "Image File Name :", val: identifyResult?.image_filename || '—' },
+                                                            { label: "Manufacturer :", val: identifyResult?.manufacturer || '—' },
+                                                            { label: "Civil ID :", val: identifyResult?.image_metadata?.['Civil ID'] || '—' },
+                                                            { label: "Common Name :", val: identifyResult?.image_metadata?.['Common Name'] || '—' },
+                                                            { label: "Confidence Factor :", val: identifyResult?.image_metadata?.['Confidence Factor'] || '—' },
+                                                            { label: "Operator :", val: identifyResult?.image_metadata?.['Operator'] || '—' },
                                                         ].map((spec) => (
                                                             <tr key={spec.label}>
                                                                 <td className="py-2 text-[#6b7280] w-[140px]">{spec.label}</td>
@@ -327,7 +499,10 @@ export default function DashboardPage() {
                                         </div>
 
                                         <div className="mt-6 pt-6 border-t border-[#e5e7eb] text-[13px] leading-[1.6] text-[#6b7280]">
-                                            <p>Notes : Distinctive 6-wheel main landing gear bogies confirm it is a 777. The fuselage length with four main doors per side indicates the -200 variant. Fleet number '2378' is visible on the nose gear doors.</p>
+                                            <p>Notes : {identifyResult?.image_metadata?.['Notes'] || '—'}</p>
+                                            {identifyResult?.historical_context && (
+                                                <p className="mt-3">{identifyResult.historical_context.slice(0, 400)}{identifyResult.historical_context.length > 400 ? '...' : ''}</p>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -345,13 +520,13 @@ export default function DashboardPage() {
                                 <div className="flex gap-3">
                                     <div className="relative">
                                         <i className="ti ti-search absolute left-3 top-1/2 -translate-y-1/2 text-[#6b7280]"></i>
-                                        <input type="text" placeholder="Search Database..." className="pl-9 pr-3 py-2.5 border border-[#e5e7eb] rounded-md w-[280px] text-[14px] outline-none text-[#111827] focus:border-[#3730a3]" />
+                                        <input type="text" placeholder="Search Database..." onKeyDown={handleSearch} className="pl-9 pr-3 py-2.5 border border-[#e5e7eb] rounded-md w-[280px] text-[14px] outline-none text-[#111827] focus:border-[#3730a3]" />
                                     </div>
                                     <button className="px-3 py-2 border border-[#e5e7eb] bg-white rounded-md flex items-center text-[#6b7280] text-[18px] cursor-pointer hover:bg-gray-50">
                                         <i className="ti ti-filter"></i>
                                     </button>
                                 </div>
-                                <button className="bg-[#3730a3] text-white border-none py-2.5 px-5 rounded-md text-[14px] font-medium cursor-pointer hover:bg-[#312e81] flex items-center gap-2">
+                                <button onClick={() => aircraftService.exportAll()} className="bg-[#3730a3] text-white border-none py-2.5 px-5 rounded-md text-[14px] font-medium cursor-pointer hover:bg-[#312e81] flex items-center gap-2">
                                     <i className="ti ti-upload"></i> Export Database
                                 </button>
                             </div>
@@ -366,29 +541,30 @@ export default function DashboardPage() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {[
-                                            { f: "AAAA.jpg", reg: "N12345", a: "Cessna 172", s: "17263421", o: "SkyHigh Aviation", y: "2018" },
-                                            { f: "BBBB.jpg", reg: "N67890", a: "Piper PA-28", s: "28-7625134", o: "Blue Horizon LLC", y: "2015" },
-                                            { f: "CCCC.jpg", reg: "N11223", a: "Boeing 737-800", s: "40578", o: "United Airlines", y: "2020" },
-                                            { f: "DDDD.jpg", reg: "N44556", a: "Cessna 182T", s: "18281672", o: "Aviation Academy Inc", y: "2012" },
-                                            { f: "EEEE.jpg", reg: "N77889", a: "Cirrus SR22", s: "4521", o: "Private Owner", y: "2021" },
-                                        ].map((row, idx) => (
-                                            <tr key={idx} className="last:border-0">
-                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.f}</td>
-                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.reg}</td>
-                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.a}</td>
-                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.s}</td>
-                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.o}</td>
-                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.y}</td>
+                                        {displayRecords.map((row: any, idx: number) => (
+                                            <tr key={idx} className="last:border-0 hover:bg-[#f9fafb] transition-colors">
+                                                {/* Backend DB columns: filename, civilid, model, serno, owner, manf */}
+                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.filename || '—'}</td>
+                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.civilid || row.milid || '—'}</td>
+                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.model || '—'}</td>
+                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.serno || '—'}</td>
+                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.owner || '—'}</td>
+                                                <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.manf || '—'}</td>
                                                 <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">
-                                                    <button className="bg-transparent border-none text-[#6b7280] cursor-pointer text-[18px]"><i className="ti ti-dots-vertical"></i></button>
+                                                    <button className="bg-transparent border-none text-[#6b7280] cursor-pointer text-[18px] hover:text-[#3730a3]"><i className="ti ti-dots-vertical"></i></button>
                                                 </td>
                                             </tr>
                                         ))}
                                     </tbody>
                                 </table>
+                                {displayRecords.length === 0 && !isLoading && (
+                                    <div className="p-8 text-center text-[#6b7280] text-[14px]">No records found.</div>
+                                )}
+                                {isLoading && (
+                                    <div className="p-8 text-center text-[#3730a3] text-[14px] flex justify-center"><i className="ti ti-loader animate-spin text-[24px]"></i></div>
+                                )}
                                 <div className="flex justify-between items-center px-6 py-4 bg-[#fdfdfd] border-t border-[#e5e7eb]">
-                                    <span className="text-[13px] text-[#6b7280]">Showing 1 to 5 of 154 Images</span>
+                                    <span className="text-[13px] text-[#6b7280]">Showing 1 to {displayRecords.length} Images</span>
                                     <div className="flex gap-2">
                                         <a href="#" className="w-8 h-8 flex justify-center items-center rounded-lg text-[13px] text-[#111827] bg-transparent hover:bg-[#f3f4f6]" onClick={(e) => e.preventDefault()}><i className="ti ti-chevron-left"></i></a>
                                         <a href="#" className="w-8 h-8 flex justify-center items-center rounded-lg text-[13px] text-white bg-[#3730a3]" onClick={(e) => e.preventDefault()}>1</a>
@@ -407,21 +583,21 @@ export default function DashboardPage() {
                             <h1 className="text-[24px] font-semibold mb-2">Settings</h1>
                             <p className="text-[14px] text-[#6b7280]">Manage your account and application preferences</p>
 
+                            {error && (
+                                <div className="mt-4 mb-2 p-3 rounded bg-red-50 border border-red-200 text-red-600 text-[14px]">
+                                    {error}
+                                </div>
+                            )}
+
                             <div className="flex gap-6 mt-6">
                                 {/* Settings Sidebar */}
                                 <div className="w-[240px] shrink-0">
                                     <div className="bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.05)] overflow-hidden">
                                         <div className="p-2 flex flex-col gap-1">
-                                            <button 
-                                                onClick={() => setSettingsTab("profile")}
-                                                className={`flex items-center gap-3 px-4 py-3 text-[14px] border-none cursor-pointer rounded-lg transition-colors text-left ${settingsTab === "profile" ? 'bg-[#f3f4f6] text-[#111827] font-medium' : 'bg-transparent text-[#6b7280] hover:bg-gray-50'}`}
-                                            >
+                                            <button onClick={() => { setSettingsTab("profile"); setError(null); }} className={`flex items-center gap-3 px-4 py-3 text-[14px] border-none cursor-pointer rounded-lg transition-colors text-left ${settingsTab === "profile" ? 'bg-[#f3f4f6] text-[#111827] font-medium' : 'bg-transparent text-[#6b7280] hover:bg-gray-50'}`}>
                                                 <i className="ti ti-user text-[18px]"></i> Profile
                                             </button>
-                                            <button 
-                                                onClick={() => setSettingsTab("security")}
-                                                className={`flex items-center gap-3 px-4 py-3 text-[14px] border-none cursor-pointer rounded-lg transition-colors text-left ${settingsTab === "security" ? 'bg-[#f3f4f6] text-[#111827] font-medium' : 'bg-transparent text-[#6b7280] hover:bg-gray-50'}`}
-                                            >
+                                            <button onClick={() => { setSettingsTab("security"); setError(null); }} className={`flex items-center gap-3 px-4 py-3 text-[14px] border-none cursor-pointer rounded-lg transition-colors text-left ${settingsTab === "security" ? 'bg-[#f3f4f6] text-[#111827] font-medium' : 'bg-transparent text-[#6b7280] hover:bg-gray-50'}`}>
                                                 <i className="ti ti-shield-check text-[18px]"></i> Security
                                             </button>
                                         </div>
@@ -447,30 +623,33 @@ export default function DashboardPage() {
                                                 </div>
                                             </div>
 
-                                            <div className="grid grid-cols-1 gap-5 max-w-[600px]">
-                                                <div>
-                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Full Name</label>
-                                                    <input type="text" defaultValue="Dr. John Smith" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                            <form onSubmit={handleUpdateProfile}>
+                                                <div className="grid grid-cols-1 gap-5 max-w-[600px]">
+                                                    <div>
+                                                        <label className="block text-[13px] text-[#374151] mb-1.5">Full Name</label>
+                                                        <input type="text" name="name" defaultValue={profile?.name || ""} required className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[13px] text-[#374151] mb-1.5">Email Address</label>
+                                                        <input type="email" name="email" defaultValue={profile?.email || ""} required className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[13px] text-[#374151] mb-1.5">Phone Number</label>
+                                                        <input type="tel" name="phone" defaultValue={profile?.phone || ""} className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[13px] text-[#374151] mb-1.5">Organization</label>
+                                                        <input type="text" name="organization" defaultValue={profile?.organization || ""} className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                    </div>
                                                 </div>
-                                                <div>
-                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Email Address</label>
-                                                    <input type="email" defaultValue="dr.smith@hospital.com" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Phone Number</label>
-                                                    <input type="tel" defaultValue="dr.smith@hospital.com" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Organization</label>
-                                                    <input type="text" defaultValue="AeroVision Inc." className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
-                                                </div>
-                                            </div>
 
-                                            <div className="mt-8">
-                                                <button className="bg-[#4338ca] border-none cursor-pointer hover:bg-[#3730a3] text-white text-[14px] font-medium py-2.5 px-5 rounded-md transition-colors flex items-center gap-2">
-                                                    <i className="ti ti-device-floppy text-[18px]"></i> Save Changes
-                                                </button>
-                                            </div>
+                                                <div className="mt-8">
+                                                    <button type="submit" disabled={isLoading} className="bg-[#4338ca] border-none cursor-pointer hover:bg-[#3730a3] text-white text-[14px] font-medium py-2.5 px-5 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50">
+                                                        {isLoading ? <i className="ti ti-loader animate-spin text-[18px]"></i> : <i className="ti ti-device-floppy text-[18px]"></i>}
+                                                        Save Changes
+                                                    </button>
+                                                </div>
+                                            </form>
                                         </div>
                                     )}
 
@@ -479,33 +658,35 @@ export default function DashboardPage() {
                                             <h2 className="text-[16px] font-semibold text-[#111827] mb-1">Change Password</h2>
                                             <p className="text-[13px] text-[#6b7280] mb-8 pb-6 border-b border-[#e5e7eb]">Ensure your account uses a strong, unique password</p>
                                             
-                                            <div className="grid grid-cols-1 gap-5 max-w-[600px]">
-                                                <div>
-                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Current Password</label>
-                                                    <input type="password" placeholder="Enter your current password" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                            <form onSubmit={handleChangePassword}>
+                                                <div className="grid grid-cols-1 gap-5 max-w-[600px]">
+                                                    <div>
+                                                        <label className="block text-[13px] text-[#374151] mb-1.5">Current Password</label>
+                                                        <input type="password" name="current_password" required placeholder="Enter your current password" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[13px] text-[#374151] mb-1.5">New Password</label>
+                                                        <input type="password" name="new_password" required placeholder="Enter your new password" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[13px] text-[#374151] mb-1.5">Confirm New Password</label>
+                                                        <input type="password" name="confirm_password" required placeholder="Enter new password" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
+                                                    </div>
                                                 </div>
-                                                <div>
-                                                    <label className="block text-[13px] text-[#374151] mb-1.5">New Password</label>
-                                                    <input type="password" placeholder="Enter your new password" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-[13px] text-[#374151] mb-1.5">Confirm New Password</label>
-                                                    <input type="password" placeholder="Enter new password" className="w-full border border-[#e5e7eb] rounded-lg px-4 py-2.5 text-[14px] text-[#111827] outline-none focus:border-[#5b51d8] focus:ring-1 focus:ring-[#5b51d8]" />
-                                                </div>
-                                            </div>
 
-                                            <div className="mt-8">
-                                                <button className="bg-[#4338ca] border-none cursor-pointer hover:bg-[#3730a3] text-white text-[14px] font-medium py-2.5 px-5 rounded-md transition-colors flex items-center gap-2">
-                                                    <i className="ti ti-device-floppy text-[18px]"></i> Update Password
-                                                </button>
-                                            </div>
+                                                <div className="mt-8">
+                                                    <button type="submit" disabled={isLoading} className="bg-[#4338ca] border-none cursor-pointer hover:bg-[#3730a3] text-white text-[14px] font-medium py-2.5 px-5 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50">
+                                                        {isLoading ? <i className="ti ti-loader animate-spin text-[18px]"></i> : <i className="ti ti-device-floppy text-[18px]"></i>}
+                                                        Update Password
+                                                    </button>
+                                                </div>
+                                            </form>
                                         </div>
                                     )}
                                 </div>
                             </div>
                         </div>
                     )}
-
                 </div>
             </main>
         </div>
