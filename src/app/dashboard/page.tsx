@@ -16,16 +16,30 @@ export default function DashboardPage() {
 
     // Loading & Error states
     const [isLoading, setIsLoading] = useState(false);
+    const [isIdentifying, setIsIdentifying] = useState(false); // separate from isLoading
     const [error, setError] = useState<string | null>(null);
 
     // Data states
     const [stats, setStats] = useState<any>(null);
     const [identifyResult, setIdentifyResult] = useState<any>(null);
     const [records, setRecords] = useState<any[]>([]);
-    const [profile, setProfile] = useState<any>(() => authService.getUser()); // load cached user immediately
+    const [profile, setProfile] = useState<any>(null); // initialized after mount to avoid SSR hydration mismatch
     const [previewImage, setPreviewImage] = useState<string | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    // Ref to track the in-flight identification promise across tab switches
+    const identifyPromiseRef = useRef<Promise<any> | null>(null);
+
+    // Database row actions
+    const [openRowMenu, setOpenRowMenu] = useState<number | null>(null); // ikey of row with open menu
+    const [detailRecord, setDetailRecord] = useState<any>(null); // record shown in detail modal
+    const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null); // ikey pending delete
+
+    // Load cached user from localStorage after mount (avoids SSR hydration mismatch)
+    useEffect(() => {
+        const cachedUser = authService.getUser();
+        if (cachedUser) setProfile(cachedUser);
+    }, []);
 
     useEffect(() => {
         setError(null);
@@ -81,24 +95,31 @@ export default function DashboardPage() {
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
-            setIsLoading(true);
+            setIsIdentifying(true);
+            setIdentifyState('analyzing');
             setError(null);
             
             // Create local preview immediately
             const objectUrl = URL.createObjectURL(file);
             setPreviewImage(objectUrl);
 
+            // Fire the API call and store the promise in a ref so it survives tab switches
+            const promise = aircraftService.identify(file);
+            identifyPromiseRef.current = promise;
+
+            // Reset the file input immediately so re-uploads work
+            e.target.value = '';
+
             try {
-                // /api/aircraft/identify returns the FULL result directly (no second GET needed)
-                // Response: { model_name, manufacturer, image_filename, image_metadata, technical_specs, historical_context, verified_links }
-                const result: any = await aircraftService.identify(file);
+                const result: any = await promise;
                 setIdentifyResult(result);
                 setIdentifyState('result');
             } catch (err: any) {
                 setError(err.message || 'Failed to identify image');
+                setIdentifyState('upload');
             } finally {
-                setIsLoading(false);
-                e.target.value = '';
+                setIsIdentifying(false);
+                identifyPromiseRef.current = null;
             }
         }
     };
@@ -159,6 +180,17 @@ export default function DashboardPage() {
     const handleSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === 'Enter') {
             fetchRecords(e.currentTarget.value);
+        }
+    };
+
+    const handleDeleteRecord = async (id: number) => {
+        try {
+            await aircraftService.deleteRecord(id);
+            setRecords(prev => prev.filter((r: any) => r.ikey !== id));
+            setDeleteConfirmId(null);
+            setOpenRowMenu(null);
+        } catch (err: any) {
+            alert(err.message || 'Failed to delete record');
         }
     };
 
@@ -351,53 +383,56 @@ export default function DashboardPage() {
                                 )}
                             </div>
 
-                            {identifyState === "upload" && (
-                                <div className="animate-in fade-in duration-300">
-                                    <div className="flex items-center justify-between bg-white rounded-xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.05)] mt-6">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-12 h-12 rounded-lg bg-[#3730a3] text-white flex items-center justify-center text-[24px]">
-                                                <i className="ti ti-upload"></i>
-                                            </div>
-                                            <div>
-                                                <div className="font-semibold text-[14px] text-[#111827]">Upload Image</div>
-                                                <div className="text-[12px] text-[#6b7280]">Drop aircraft photos</div>
-                                            </div>
+                            {/* Steps indicator bar — shared across upload/analyzing states */}
+                            {(identifyState === "upload" || identifyState === "analyzing") && (
+                                <div className="flex items-center justify-between bg-white rounded-xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.05)] mt-6">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center text-[24px] ${identifyState === 'upload' ? 'bg-[#3730a3] text-white' : 'bg-[#10b981] text-white'}`}>
+                                            <i className={identifyState === 'upload' ? 'ti ti-upload' : 'ti ti-circle-check'}></i>
                                         </div>
-                                        <i className="ti ti-chevron-right text-[#6b7280] text-[20px]"></i>
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-12 h-12 rounded-lg bg-[#f3f4f6] text-[#111827] flex items-center justify-center text-[24px]">
-                                                <i className="ti ti-scan"></i>
-                                            </div>
-                                            <div>
-                                                <div className="font-semibold text-[14px] text-[#111827]">AI Detection</div>
-                                                <div className="text-[12px] text-[#6b7280]">OCR & type ID</div>
-                                            </div>
-                                        </div>
-                                        <i className="ti ti-chevron-right text-[#6b7280] text-[20px]"></i>
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-12 h-12 rounded-lg bg-[#f3f4f6] text-[#111827] flex items-center justify-center text-[24px]">
-                                                <i className="ti ti-database"></i>
-                                            </div>
-                                            <div>
-                                                <div className="font-semibold text-[14px] text-[#111827]">Database Lookup</div>
-                                                <div className="text-[12px] text-[#6b7280]">Check the existing database</div>
-                                            </div>
-                                        </div>
-                                        <i className="ti ti-chevron-right text-[#6b7280] text-[20px]"></i>
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-12 h-12 rounded-lg bg-[#f3f4f6] text-[#111827] flex items-center justify-center text-[24px]">
-                                                <i className="ti ti-file-description"></i>
-                                            </div>
-                                            <div>
-                                                <div className="font-semibold text-[14px] text-[#111827]">Aircraft Result</div>
-                                                <div className="text-[12px] text-[#6b7280]">Get all craft details</div>
-                                            </div>
+                                        <div>
+                                            <div className="font-semibold text-[14px] text-[#111827]">Upload Image</div>
+                                            <div className="text-[12px] text-[#6b7280]">{identifyState === 'upload' ? 'Drop aircraft photos' : 'Image uploaded'}</div>
                                         </div>
                                     </div>
+                                    <i className="ti ti-chevron-right text-[#6b7280] text-[20px]"></i>
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center text-[24px] ${identifyState === 'analyzing' ? 'bg-[#3730a3] text-white animate-pulse' : 'bg-[#f3f4f6] text-[#111827]'}`}>
+                                            <i className="ti ti-scan"></i>
+                                        </div>
+                                        <div>
+                                            <div className="font-semibold text-[14px] text-[#111827]">AI Detection</div>
+                                            <div className="text-[12px] text-[#6b7280]">{identifyState === 'analyzing' ? 'Processing...' : 'OCR & type ID'}</div>
+                                        </div>
+                                    </div>
+                                    <i className="ti ti-chevron-right text-[#6b7280] text-[20px]"></i>
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-12 h-12 rounded-lg bg-[#f3f4f6] text-[#111827] flex items-center justify-center text-[24px]">
+                                            <i className="ti ti-database"></i>
+                                        </div>
+                                        <div>
+                                            <div className="font-semibold text-[14px] text-[#111827]">Database Lookup</div>
+                                            <div className="text-[12px] text-[#6b7280]">Check the existing database</div>
+                                        </div>
+                                    </div>
+                                    <i className="ti ti-chevron-right text-[#6b7280] text-[20px]"></i>
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-12 h-12 rounded-lg bg-[#f3f4f6] text-[#111827] flex items-center justify-center text-[24px]">
+                                            <i className="ti ti-file-description"></i>
+                                        </div>
+                                        <div>
+                                            <div className="font-semibold text-[14px] text-[#111827]">Aircraft Result</div>
+                                            <div className="text-[12px] text-[#6b7280]">Get all craft details</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
 
+                            {identifyState === "upload" && (
+                                <div className="animate-in fade-in duration-300">
                                     <div
                                         onClick={() => fileInputRef.current?.click()}
-                                        className={`border-2 border-dashed ${isLoading ? 'border-[#e5e7eb] bg-[#f9fafb]' : 'border-[#3730A3]/40 bg-white hover:bg-[#fdfdff] hover:border-[#3730a3]'} rounded-xl py-14 px-6 flex flex-col items-center text-center cursor-pointer transition-all mt-6`}
+                                        className="border-2 border-dashed border-[#3730A3]/40 bg-white hover:bg-[#fdfdff] hover:border-[#3730a3] rounded-xl py-14 px-6 flex flex-col items-center text-center cursor-pointer transition-all mt-6"
                                     >
                                         <input 
                                             type="file" 
@@ -406,24 +441,24 @@ export default function DashboardPage() {
                                             className="hidden" 
                                             accept="image/*"
                                         />
-                                        {isLoading ? (
-                                            <div className="flex flex-col items-center">
-                                                <i className="ti ti-loader text-[#3730a3] text-[32px] mb-4 animate-spin"></i>
-                                                <h3 className="font-semibold text-[16px] mb-2">Analyzing Image...</h3>
-                                                <p className="text-[13px] text-[#6b7280] max-w-[500px]">Please wait while our AI processes the aircraft data.</p>
-                                            </div>
-                                        ) : (
-                                            <>
-                                                <i className="ti ti-camera text-[#3730a3] text-[32px] mb-4"></i>
-                                                <h3 className="font-semibold text-[16px] mb-2">Upload Aircraft Images</h3>
-                                                <p className="text-[13px] text-[#6b7280] max-w-[500px] leading-relaxed">
-                                                    Drop aircraft photos here or click to upload. Our AI will detect<br />the registration number, identify the aircraft type, and fetch FAA<br />data automatically.
-                                                </p>
-                                                <button className="bg-[#3730a3] text-white border-none py-2.5 px-5 rounded-md text-[14px] font-medium cursor-pointer hover:bg-[#312e81] mt-6 mx-auto">
-                                                    Select Image
-                                                </button>
-                                            </>
-                                        )}
+                                        <i className="ti ti-camera text-[#3730a3] text-[32px] mb-4"></i>
+                                        <h3 className="font-semibold text-[16px] mb-2">Upload Aircraft Images</h3>
+                                        <p className="text-[13px] text-[#6b7280] max-w-[500px] leading-relaxed">
+                                            Drop aircraft photos here or click to upload. Our AI will detect<br />the registration number, identify the aircraft type, and fetch FAA<br />data automatically.
+                                        </p>
+                                        <button className="bg-[#3730a3] text-white border-none py-2.5 px-5 rounded-md text-[14px] font-medium cursor-pointer hover:bg-[#312e81] mt-6 mx-auto">
+                                            Select Image
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {identifyState === "analyzing" && (
+                                <div className="animate-in fade-in duration-300">
+                                    <div className="border-2 border-dashed border-[#e5e7eb] bg-[#f9fafb] rounded-xl py-14 px-6 flex flex-col items-center text-center mt-6">
+                                        <i className="ti ti-loader text-[#3730a3] text-[32px] mb-4 animate-spin"></i>
+                                        <h3 className="font-semibold text-[16px] mb-2">Analyzing Image...</h3>
+                                        <p className="text-[13px] text-[#6b7280] max-w-[500px]">Please wait while our AI processes the aircraft data. You can switch tabs — this will continue in the background.</p>
                                     </div>
                                 </div>
                             )}
@@ -542,7 +577,7 @@ export default function DashboardPage() {
                                     </thead>
                                     <tbody>
                                         {displayRecords.map((row: any, idx: number) => (
-                                            <tr key={idx} className="last:border-0 hover:bg-[#f9fafb] transition-colors">
+                                            <tr key={row.ikey || idx} className="last:border-0 hover:bg-[#f9fafb] transition-colors">
                                                 {/* Backend DB columns: filename, civilid, model, serno, owner, manf */}
                                                 <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.filename || '—'}</td>
                                                 <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.civilid || row.milid || '—'}</td>
@@ -551,7 +586,30 @@ export default function DashboardPage() {
                                                 <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.owner || '—'}</td>
                                                 <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">{row.manf || '—'}</td>
                                                 <td className="px-6 py-5 border-b border-[#e5e7eb] text-[14px] text-[#111827]">
-                                                    <button className="bg-transparent border-none text-[#6b7280] cursor-pointer text-[18px] hover:text-[#3730a3]"><i className="ti ti-dots-vertical"></i></button>
+                                                    <div className="relative">
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); setOpenRowMenu(openRowMenu === row.ikey ? null : row.ikey); }}
+                                                            className="bg-transparent border-none text-[#6b7280] cursor-pointer text-[18px] hover:text-[#3730a3]"
+                                                        >
+                                                            <i className="ti ti-dots-vertical"></i>
+                                                        </button>
+                                                        {openRowMenu === row.ikey && (
+                                                            <div className="absolute right-0 top-[calc(100%+4px)] w-[160px] bg-white rounded-lg shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-[#e5e7eb] z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                                                                <button
+                                                                    onClick={() => { setDetailRecord(row); setOpenRowMenu(null); }}
+                                                                    className="w-full flex items-center gap-2.5 px-4 py-3 text-[13px] text-[#111827] bg-transparent border-none cursor-pointer hover:bg-[#f3f4f6] transition-colors text-left"
+                                                                >
+                                                                    <i className="ti ti-eye text-[16px] text-[#3730a3]"></i> View Details
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => { setDeleteConfirmId(row.ikey); setOpenRowMenu(null); }}
+                                                                    className="w-full flex items-center gap-2.5 px-4 py-3 text-[13px] text-[#ef4444] bg-transparent border-none cursor-pointer hover:bg-red-50 transition-colors text-left"
+                                                                >
+                                                                    <i className="ti ti-trash text-[16px]"></i> Delete
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </td>
                                             </tr>
                                         ))}
@@ -572,6 +630,100 @@ export default function DashboardPage() {
                                         <a href="#" className="w-8 h-8 flex justify-center items-center rounded-lg text-[13px] text-[#111827] bg-transparent hover:bg-[#f3f4f6]" onClick={(e) => e.preventDefault()}>3</a>
                                         <a href="#" className="w-8 h-8 flex justify-center items-center rounded-lg text-[13px] text-[#111827] bg-transparent hover:bg-[#f3f4f6]" onClick={(e) => e.preventDefault()}><i className="ti ti-chevron-right"></i></a>
                                     </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* DETAIL MODAL */}
+                    {detailRecord && (
+                        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100] flex items-center justify-center p-6" onClick={() => setDetailRecord(null)}>
+                            <div className="bg-white rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.15)] w-full max-w-[700px] max-h-[85vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+                                {/* Modal Header */}
+                                <div className="flex items-center justify-between px-8 py-5 border-b border-[#e5e7eb] bg-gradient-to-r from-[#3730a3] to-[#5b51d8]">
+                                    <div>
+                                        <h2 className="text-[18px] font-semibold text-white">{detailRecord.model || 'Unknown Aircraft'}</h2>
+                                        <p className="text-[13px] text-white/70 mt-0.5">{detailRecord.manf || 'Unknown Manufacturer'}</p>
+                                    </div>
+                                    <button onClick={() => setDetailRecord(null)} className="w-8 h-8 rounded-full bg-white/15 flex items-center justify-center text-white border-none cursor-pointer hover:bg-white/25 transition-colors">
+                                        <i className="ti ti-x text-[16px]"></i>
+                                    </button>
+                                </div>
+
+                                {/* Modal Body */}
+                                <div className="overflow-y-auto max-h-[calc(85vh-72px)] p-8">
+                                    {/* Status badge */}
+                                    <div className="mb-6">
+                                        <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium ${detailRecord.rights === 'Identified' ? 'text-[#10b981] bg-[#10b981]/10' : detailRecord.rights === 'Processing' ? 'text-[#f59e0b] bg-[#f59e0b]/10' : 'text-[#6b7280] bg-[#f3f4f6]'}`}>
+                                            <i className={`ti ${detailRecord.rights === 'Identified' ? 'ti-circle-check' : detailRecord.rights === 'Processing' ? 'ti-loader animate-spin' : 'ti-clock'}`}></i>
+                                            {detailRecord.rights || 'Unknown'}
+                                        </span>
+                                    </div>
+
+                                    {/* Details grid */}
+                                    <div className="grid grid-cols-2 gap-x-8 gap-y-5">
+                                        {[
+                                            { label: 'File Name', value: detailRecord.filename, icon: 'ti-file' },
+                                            { label: 'Manufacturer', value: detailRecord.manf, icon: 'ti-building-factory' },
+                                            { label: 'Aircraft Model', value: detailRecord.model, icon: 'ti-plane' },
+                                            { label: 'Category', value: detailRecord.category, icon: 'ti-category' },
+                                            { label: 'Civil ID', value: detailRecord.civilid, icon: 'ti-id' },
+                                            { label: 'Military ID', value: detailRecord.milid, icon: 'ti-shield' },
+                                            { label: 'Serial / C/N', value: detailRecord.serno, icon: 'ti-hash' },
+                                            { label: 'Owner / Operator', value: detailRecord.owner, icon: 'ti-user' },
+                                            { label: 'Type', value: detailRecord.type, icon: 'ti-tag' },
+                                            { label: 'Folder', value: detailRecord.folder, icon: 'ti-folder' },
+                                            { label: 'Neg No.', value: detailRecord.negno, icon: 'ti-photo' },
+                                            { label: 'Image Quality', value: detailRecord.imgqual ? `${detailRecord.imgqual}/5` : null, icon: 'ti-star' },
+                                            { label: 'Photo Date', value: detailRecord.photodate, icon: 'ti-calendar' },
+                                            { label: 'Location', value: detailRecord.location, icon: 'ti-map-pin' },
+                                            { label: 'View', value: detailRecord.view, icon: 'ti-eye' },
+                                            { label: 'Photographer', value: detailRecord.photog, icon: 'ti-camera' },
+                                            { label: 'Collection', value: detailRecord.collection, icon: 'ti-archive' },
+                                            { label: 'Record ID', value: detailRecord.ikey, icon: 'ti-key' },
+                                        ].map(item => (
+                                            <div key={item.label} className="flex items-start gap-3">
+                                                <div className="w-8 h-8 rounded-md bg-[#f3f4f6] flex items-center justify-center text-[#6b7280] text-[14px] shrink-0 mt-0.5">
+                                                    <i className={`ti ${item.icon}`}></i>
+                                                </div>
+                                                <div>
+                                                    <div className="text-[12px] text-[#6b7280] font-medium">{item.label}</div>
+                                                    <div className="text-[14px] text-[#111827] mt-0.5">{item.value || '—'}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {/* Notes section */}
+                                    {detailRecord.notes && (
+                                        <div className="mt-6 pt-5 border-t border-[#e5e7eb]">
+                                            <div className="flex items-center gap-2 text-[13px] font-medium text-[#6b7280] mb-2">
+                                                <i className="ti ti-notes text-[16px]"></i> Notes
+                                            </div>
+                                            <p className="text-[14px] text-[#111827] leading-relaxed bg-[#f9fafb] rounded-lg p-4">{detailRecord.notes}</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* DELETE CONFIRMATION */}
+                    {deleteConfirmId !== null && (
+                        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100] flex items-center justify-center p-6" onClick={() => setDeleteConfirmId(null)}>
+                            <div className="bg-white rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.15)] w-full max-w-[400px] p-8 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+                                <div className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-5">
+                                    <i className="ti ti-alert-triangle text-[#ef4444] text-[28px]"></i>
+                                </div>
+                                <h3 className="text-[18px] font-semibold text-center text-[#111827]">Delete Record</h3>
+                                <p className="text-[14px] text-[#6b7280] text-center mt-2 mb-6">Are you sure you want to delete this record? This action cannot be undone.</p>
+                                <div className="flex gap-3">
+                                    <button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-2.5 bg-[#f3f4f6] text-[#111827] rounded-lg text-[14px] font-medium border-none cursor-pointer hover:bg-[#e5e7eb] transition-colors">
+                                        Cancel
+                                    </button>
+                                    <button onClick={() => handleDeleteRecord(deleteConfirmId)} className="flex-1 py-2.5 bg-[#ef4444] text-white rounded-lg text-[14px] font-medium border-none cursor-pointer hover:bg-[#dc2626] transition-colors">
+                                        Delete
+                                    </button>
                                 </div>
                             </div>
                         </div>

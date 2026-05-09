@@ -44,7 +44,14 @@ export const aircraftService = {
   identify: async (imageFile: File): Promise<IdentifyResult> => {
     const formData = new FormData();
     formData.append('image', imageFile);
-    return api.post<IdentifyResult>('/api/aircraft/identify', formData);
+    // AI analysis + deep search can take 1-3 min; timeout at 5 min to prevent infinite hangs
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 300_000);
+    try {
+      return await api.post<IdentifyResult>('/api/aircraft/identify', formData, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
   },
 
   /**
@@ -53,6 +60,14 @@ export const aircraftService = {
    */
   getQueue: async () => {
     return api.get<{ status: string; pending_tasks: number; completed_tasks: number }>('/api/aircraft/queue');
+  },
+
+  /**
+   * DELETE /api/aircraft/records/:id
+   * Deletes a single record by ikey. Requires auth token.
+   */
+  deleteRecord: async (id: number) => {
+    return api.delete<{ message: string; ikey: number }>(`/api/aircraft/records/${id}`);
   },
 
   /**
@@ -71,8 +86,7 @@ export const aircraftService = {
    */
   exportAll: () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : '';
-    const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000';
-    // Append token to URL since we can't set headers in a native download
-    window.open(`${baseUrl}/api/aircraft/export-all?token=${token}`, '_blank');
+    // Use the same base URL as the rest of the API
+    window.open(`http://127.0.0.1:5000/api/aircraft/export-all?token=${token}`, '_blank');
   },
 };

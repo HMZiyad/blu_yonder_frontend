@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000';
+const API_BASE_URL = 'http://127.0.0.1:5000';
 
 interface RequestOptions extends RequestInit {
   data?: any;
@@ -72,7 +72,7 @@ export async function fetchApi<T>(endpoint: string, options: RequestOptions = {}
 
     return responseData as T;
   } catch (error) {
-    console.error(`Error in API call to ${endpoint}:`, error);
+    console.error(`Error in API call to [${config.method}] ${url}:`, error);
     throw error;
   }
 }
